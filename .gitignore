@@ -28,6 +28,7 @@ yalc.lock
 
 # Environment variables
 .env
+.vercel
 
 # Attachment files — ignore everything inside attachments/ except the README.
 # Drop your own files there locally; they will NOT be committed to the repo.
