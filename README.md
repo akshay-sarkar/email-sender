@@ -2,6 +2,11 @@
 
 A personal email-sending tool built with **React + Vite + TypeScript** on the frontend and **Express + Nodemailer** on the backend. Supports single and bulk BCC email sending, password-protected access, session persistence, and file attachment selection.
 
+<img width="585" height="321" alt="image" src="https://github.com/user-attachments/assets/a475a575-42f8-41d7-b9e7-3b028dfaca78" />
+
+<img width="608" height="525" alt="image" src="https://github.com/user-attachments/assets/6422e201-8538-4a04-8943-e5d3ddded46e" />
+
+
 ---
 
 ## Features
