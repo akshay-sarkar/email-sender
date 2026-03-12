@@ -29,7 +29,7 @@ yalc.lock
 # Environment variables
 .env
 
-# Attachment files — do NOT ignore the attachments/ folder.
-# Files placed there (e.g. resume PDFs) must be committed so Vercel
-# can bundle them at build time. Only ignore OS junk inside it.
-attachments/.DS_Store
+# Attachment files — ignore everything inside attachments/ except the README.
+# Drop your own files there locally; they will NOT be committed to the repo.
+attachments/*
+!attachments/README.md
