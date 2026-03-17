@@ -17,10 +17,18 @@ export const EmailSender = () => {
   const [attachmentFiles, setAttachmentFiles] = useState<string[]>([])
   const [selectedAttachment, setSelectedAttachment] = useState("")
 
+  // ─── Email templates (body & subject) ────────────────────────────────────
+  const [emailBodies, setEmailBodies] = useState<Record<string, string>>({})
+  const [selectedBodyKey, setSelectedBodyKey] = useState("")
+  const [customBody, setCustomBody] = useState("")
+
+  const [emailSubjects, setEmailSubjects] = useState<Record<string, string>>({})
+  const [selectedSubjectKey, setSelectedSubjectKey] = useState("")
+  const [customSubject, setCustomSubject] = useState("")
+
   // ─── Email state ──────────────────────────────────────────────────────────
   const [email, setEmail] = useState("")
   const [recipientName, setRecipientName] = useState("")
-  const [subject, setSubject] = useState("")
   const [sendStatus, setSendStatus] = useState<SendStatus>("idle")
   const [sendMessage, setSendMessage] = useState("")
 
@@ -40,6 +48,29 @@ export const EmailSender = () => {
       .catch(() => setAttachmentFiles([]))
   }
 
+  // ─── Helper: fetch email body templates ──────────────────────────────────
+  const loadEmailBodies = (token: string) => {
+    fetch("/api/email-bodies", { headers: { "x-session-token": token } })
+      .then((r) => r.json())
+      .then((data) => {
+        const bodies: Record<string, string> = data.bodies ?? {}
+        setEmailBodies(bodies)
+        setSelectedBodyKey(Object.keys(bodies)[0] ?? "")
+      })
+      .catch(() => {})
+  }
+
+  const loadEmailSubjects = (token: string) => {
+    fetch("/api/email-subjects", { headers: { "x-session-token": token } })
+      .then((r) => r.json())
+      .then((data) => {
+        const subjects: Record<string, string> = data.subjects ?? {}
+        setEmailSubjects(subjects)
+        setSelectedSubjectKey(Object.keys(subjects)[0] ?? "")
+      })
+      .catch(() => {})
+  }
+
   // ─── Auto-authenticate from localStorage on mount ────────────────────────
   useEffect(() => {
     const storedToken = localStorage.getItem(TOKEN_KEY)
@@ -54,6 +85,8 @@ export const EmailSender = () => {
           setSessionToken(storedToken)
           setAuthenticated(true)
           loadAttachments(storedToken)
+          loadEmailBodies(storedToken)
+          loadEmailSubjects(storedToken)
         } else {
           localStorage.removeItem(TOKEN_KEY)
         }
@@ -83,6 +116,8 @@ export const EmailSender = () => {
         setAuthenticated(true)
         setPasswordInput("")
         loadAttachments(data.token)
+        loadEmailBodies(data.token)
+        loadEmailSubjects(data.token)
       } else {
         setPasswordError(data.error || "Incorrect password.")
       }
@@ -109,8 +144,11 @@ export const EmailSender = () => {
           to: email,
           // name is ignored for bulk sends
           ...(!isMultiple && recipientName.trim() && { name: recipientName.trim() }),
-          ...(subject.trim() && { subject: subject.trim() }),
           ...(selectedAttachment && { attachment: selectedAttachment }),
+          bodyKey: selectedBodyKey,
+          ...(selectedBodyKey === "Other" && { customBody }),
+          subjectKey: selectedSubjectKey,
+          ...(selectedSubjectKey === "Other" && { customSubject }),
         }),
       })
 
@@ -121,8 +159,9 @@ export const EmailSender = () => {
         setSendMessage(data.message)
         setEmail("")
         setRecipientName("")
-        setSubject("")
         setSelectedAttachment(attachmentFiles[0] ?? "")
+        setCustomBody("")
+        setCustomSubject("")
       } else {
         setSendStatus("error")
         setSendMessage(data.error || "Something went wrong.")
@@ -227,18 +266,62 @@ export const EmailSender = () => {
           className="emailSender__input"
         />
 
-        <label htmlFor="subject">
-          Subject <span className="emailSender__optional">(optional — uses default if blank)</span>
-        </label>
-        <input
+        <label htmlFor="subject">Subject</label>
+        <select
           id="subject"
-          type="text"
-          value={subject}
-          onChange={(e) => setSubject(e.target.value)}
-          placeholder="Hello from us!"
+          value={selectedSubjectKey}
+          onChange={(e) => setSelectedSubjectKey(e.target.value)}
           disabled={sendStatus === "sending"}
-          className="emailSender__input"
-        />
+          className="emailSender__input emailSender__select"
+        >
+          {Object.keys(emailSubjects).map((key) => (
+            <option key={key} value={key}>
+              {key}
+            </option>
+          ))}
+        </select>
+
+        {selectedSubjectKey === "Other" && (
+          <input
+            id="customSubject"
+            type="text"
+            value={customSubject}
+            onChange={(e) => setCustomSubject(e.target.value)}
+            placeholder="Enter custom subject…"
+            disabled={sendStatus === "sending"}
+            className="emailSender__input"
+          />
+        )}
+
+        <label htmlFor="emailBody">Email Body</label>
+        <select
+          id="emailBody"
+          value={selectedBodyKey}
+          onChange={(e) => setSelectedBodyKey(e.target.value)}
+          disabled={sendStatus === "sending"}
+          className="emailSender__input emailSender__select"
+        >
+          {Object.keys(emailBodies).map((key) => (
+            <option key={key} value={key}>
+              {key}
+            </option>
+          ))}
+        </select>
+
+        {selectedBodyKey === "Other" && (
+          <>
+            <label htmlFor="customBody">Custom Email Body</label>
+            <textarea
+              id="customBody"
+              value={customBody}
+              onChange={(e) => setCustomBody(e.target.value)}
+              placeholder="Write your full email here…"
+              rows={10}
+              disabled={sendStatus === "sending"}
+              className="emailSender__input emailSender__textarea"
+            />
+          </>
+        )}
 
         <label htmlFor="attachment">Attachment</label>
         {attachmentFiles.length > 0 ? (
@@ -263,7 +346,11 @@ export const EmailSender = () => {
 
         <button
           type="submit"
-          disabled={sendStatus === "sending" || !email.trim()}
+          disabled={
+            sendStatus === "sending" ||
+            !email.trim() ||
+            (selectedBodyKey === "Other" && !customBody.trim())
+          }
           className="emailSender__button"
         >
           {sendStatus === "sending" ? "Sending…" : "Send Email"}

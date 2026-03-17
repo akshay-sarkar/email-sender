@@ -6,34 +6,34 @@ import fs from "fs"
 import path from "path"
 import crypto from "crypto"
 import { fileURLToPath } from "url"
+import { syncAttachments, getCachedFiles, CACHE_DIR } from "./gdrive.js"
 
 dotenv.config()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-// ─── Predefined email content ────────────────────────────────────────────────
-const EMAIL_SUBJECT = "Reaching Out From LinkedIn Post"
+// ─── Config: email bodies & subjects (read fresh on each request) ─────────────
+const DEFAULT_SUBJECT = "Reaching Out From LinkedIn Post"
+const emailBodiesPath = path.join(__dirname, "../email-bodies.json")
+const emailSubjectsPath = path.join(__dirname, "../email-subjects.json")
 
-const buildEmailBody = (name) => {
+const readJSON = (filePath) => JSON.parse(fs.readFileSync(filePath, "utf-8"))
+const writeJSON = (filePath, data) =>
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8")
+
+const resolveBody = (name, bodyKey, customBody) => {
+  if (bodyKey === "Other") return customBody ?? ""
+  const bodies = readJSON(emailBodiesPath)
+  const template = bodies[bodyKey] ?? bodies[Object.keys(bodies)[0]]
   const greeting = name?.trim() ? `Dear ${name.trim()},` : "Dear Hiring Manager,"
-  return `${greeting}
+  return `${greeting}\n\n${template}`
+}
 
-Hope your are doing well !
-
-Let me introduce myself. I am a seasoned software engineer with 12+ years of experience architecting enterprise applications for Fortune 500 companies and proven leadership in mentoring teams.
-
-7+ years of hands-on expertise in ReactJS, Redux, TypeScript, Material UI, and advanced UI engineering practices, with modern frontend tooling.
-Demonstrated experience in delivering SPAs while leveraging React Router, Redux/RTK Architecture, and TanStack Query.
-
-Strong backend and integration expertise with NodeJS, ExpressJS, PHP, Java Spring Boot, MySQL, PostgreSQL, Redis, and MongoDB, including secure REST/GraphQL API design and implementation using JWT, OAuth Integration, and Role-Based Access.
-
-You can learn more about me, https://www.linkedin.com/in/akshaysarkaruta/
-
-Thank you for considering my application. I look forward to the opportunity to discuss how my skills and experience align with your needs.
-
-Best Regards,
-Akshay Sarkar`
+const resolveSubject = (subjectKey, customSubject) => {
+  if (subjectKey === "Other") return customSubject?.trim() || DEFAULT_SUBJECT
+  const subjects = readJSON(emailSubjectsPath)
+  return subjects[subjectKey] ?? DEFAULT_SUBJECT
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -61,19 +61,53 @@ const requireAuth = (req, res) => {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ─── Shared helper: list files in attachments/ ───────────────────────────────
-const getAttachmentFiles = () => {
-  const attachmentsDir = path.join(__dirname, "../attachments")
-  if (!fs.existsSync(attachmentsDir)) return []
-  return fs
-    .readdirSync(attachmentsDir)
-    .filter((f) => !f.startsWith(".") && f !== "README.md")
+
+app.get("/api/email-bodies", (req, res) => {
+  if (!requireAuth(req, res)) return
+  res.json({ bodies: readJSON(emailBodiesPath) })
+})
+
+app.get("/api/email-subjects", (req, res) => {
+  if (!requireAuth(req, res)) return
+  res.json({ subjects: readJSON(emailSubjectsPath) })
+})
+
+// ─── Admin CRUD ───────────────────────────────────────────────────────────────
+const adminUpsert = (filePath) => (req, res) => {
+  if (!requireAuth(req, res)) return
+  const { key, value } = req.body
+  if (!key?.trim()) return res.status(400).json({ error: "key is required." })
+  const data = readJSON(filePath)
+  data[key.trim()] = value ?? ""
+  writeJSON(filePath, data)
+  res.json({ ok: true })
 }
+
+const adminDelete = (filePath) => (req, res) => {
+  if (!requireAuth(req, res)) return
+  const key = decodeURIComponent(req.params.key)
+  if (key === "Other") return res.status(400).json({ error: '"Other" is a reserved key.' })
+  const data = readJSON(filePath)
+  if (!(key in data)) return res.status(404).json({ error: `"${key}" not found.` })
+  delete data[key]
+  writeJSON(filePath, data)
+  res.json({ ok: true })
+}
+
+app.post("/api/admin/subjects", adminUpsert(emailSubjectsPath))
+app.delete("/api/admin/subjects/:key", adminDelete(emailSubjectsPath))
+app.post("/api/admin/bodies", adminUpsert(emailBodiesPath))
+app.delete("/api/admin/bodies/:key", adminDelete(emailBodiesPath))
 // ─────────────────────────────────────────────────────────────────────────────
 
-app.get("/api/attachments", (req, res) => {
+app.get("/api/attachments", async (req, res) => {
   if (!requireAuth(req, res)) return
-  res.json({ files: getAttachmentFiles() })
+  try {
+    await syncAttachments()
+  } catch (err) {
+    console.error("[gdrive] Sync error on /api/attachments:", err.message)
+  }
+  res.json({ files: getCachedFiles() })
 })
 
 app.post("/api/verify-password", (req, res) => {
@@ -96,7 +130,7 @@ app.get("/api/verify-token", (req, res) => {
 app.post("/api/send-email", async (req, res) => {
   if (!requireAuth(req, res)) return
 
-  const { to, subject, name, attachment } = req.body
+  const { to, name, attachment, bodyKey, customBody, subjectKey, customSubject } = req.body
 
   // Parse and validate recipient(s)
   const emails = String(to ?? "")
@@ -114,14 +148,14 @@ app.post("/api/send-email", async (req, res) => {
   }
 
   const isBulk = emails.length > 1
-  const resolvedSubject = subject?.trim() || EMAIL_SUBJECT
-  const resolvedBody = buildEmailBody(isBulk ? null : name)
+  const resolvedSubject = resolveSubject(subjectKey, customSubject)
+  const resolvedBody = resolveBody(isBulk ? null : name, bodyKey, customBody)
 
   // Resolve the selected attachment (if any)
   let attachments = []
   if (attachment && typeof attachment === "string" && attachment.trim()) {
     const safeName = path.basename(attachment.trim())
-    const filePath = path.join(__dirname, "../attachments", safeName)
+    const filePath = path.join(CACHE_DIR, safeName)
     if (fs.existsSync(filePath)) {
       attachments = [{ filename: safeName, path: filePath }]
     } else {
